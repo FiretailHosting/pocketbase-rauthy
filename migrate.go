@@ -5,8 +5,8 @@ import (
 )
 
 // Migrate switches the auth collection to Rauthy-only sign-in: password and
-// OTP sign-in off, OAuth2 on, account creation superuser-only, and a field
-// recording the last sign-in. Call it from one of the app's own migrations.
+// OTP sign-in off, OAuth2 on, account creation through OAuth2 or by superusers,
+// and a field recording the last sign-in. Call it from one of the app's migrations.
 //
 // The provider list is left alone: the client ID and secret are entered in
 // the PocketBase dashboard, and a migration must never overwrite them.
@@ -21,8 +21,9 @@ func Migrate(app core.App, config Config) error {
 		return err
 	}
 
-	// a nil rule means superusers only
-	collection.CreateRule = nil
+	// The OAuth2 context is assigned by PocketBase, not by the client.
+	rule := "@request.context = 'oauth2'"
+	collection.CreateRule = &rule
 	collection.PasswordAuth.Enabled = false
 	collection.OTP.Enabled = false
 	collection.OAuth2.Enabled = true

@@ -6,7 +6,6 @@ package rauthy
 
 import (
 	"errors"
-	"net/http"
 	"time"
 
 	"github.com/pocketbase/pocketbase/apis"
@@ -19,9 +18,9 @@ import (
 type Config struct {
 	// RequiredGroup is the Rauthy group a user must be in, e.g. "internal-admin".
 	RequiredGroup string
-	// SessionMaxAge is how long a session lasts after the last Rauthy sign-in.
+	// SessionMaxAge is how long sessions last after this account's last Rauthy sign-in.
 	SessionMaxAge time.Duration
-	// Collection is the auth collection; defaults to "users".
+	// Collection is the auth collection name or ID; defaults to "users".
 	Collection string
 	// Provider is the OAuth2 provider name in PocketBase; defaults to "oidc".
 	Provider string
@@ -67,7 +66,7 @@ func Register(app core.App, config Config) error {
 			e.Router.Bind(&hook.Handler[*core.RequestEvent]{
 				Priority: apis.DefaultLoadAuthTokenMiddlewarePriority + 1,
 				Func: func(e *core.RequestEvent) error {
-					if e.Auth != nil && e.Auth.Collection().Name == config.Collection && sessionExpired(e.Auth, config) {
+					if matchesCollection(e.Auth, config.Collection) && sessionExpired(e.Auth, config) {
 						e.Auth = nil
 					}
 
@@ -83,11 +82,33 @@ func Register(app core.App, config Config) error {
 		return signIn(e, config)
 	})
 
-	// The collection's create rule is superuser-only, but a rule can be edited
-	// at runtime; this keeps accounts from being created through the API anyway.
+	// Keep the guard even if someone loosens the collection's create rule.
+	// PocketBase assigns the OAuth2 context internally after our sign-in checks.
 	app.OnRecordCreateRequest(config.Collection).BindFunc(func(e *core.RecordRequestEvent) error {
-		if !e.HasSuperuserAuth() {
-			return e.Error(http.StatusForbidden, "Accounts can only be created by a superuser.", nil)
+		info, err := e.RequestInfo()
+		if err != nil {
+			return err
+		}
+		if !e.HasSuperuserAuth() && info.Context != core.RequestInfoContextOAuth2 {
+			return e.ForbiddenError("Accounts can only be created through Rauthy or by a superuser.", nil)
+		}
+
+		return e.Next()
+	})
+
+	app.OnRecordUpdateRequest(config.Collection).BindFunc(func(e *core.RecordRequestEvent) error {
+		if !e.HasSuperuserAuth() && !e.Record.GetDateTime(config.LoginField).Equal(e.Record.Original().GetDateTime(config.LoginField)) {
+			return e.ForbiddenError("The SSO login time is server-managed.", nil)
+		}
+
+		return e.Next()
+	})
+
+	// HTTP middleware cannot recheck an already-open realtime connection.
+	app.OnRealtimeMessageSend().BindFunc(func(e *core.RealtimeMessageEvent) error {
+		record, _ := e.Client.Get(apis.RealtimeClientAuthKey).(*core.Record)
+		if matchesCollection(record, config.Collection) && sessionExpired(record, config) {
+			return errors.New("rauthy: session expired") // PocketBase closes the connection
 		}
 
 		return e.Next()
@@ -110,22 +131,30 @@ func signIn(e *core.RecordAuthWithOAuth2RequestEvent, config Config) error {
 		return e.ForbiddenError("Rauthy did not supply a verified email address for this account.", nil)
 	}
 
-	// PocketBase's own sign-up goes through the create request, which the guard
-	// above rejects, so first sign-ins create the account here instead. An
-	// existing account with the same email arrives as e.Record and is linked.
-	if e.Record == nil {
-		e.Record = core.NewRecord(e.Collection)
-		e.Record.SetEmail(e.OAuth2User.Email)
-		e.Record.SetRandomPassword()
-		e.Record.SetVerified(true)
-	}
+	// Let PocketBase create and link accounts, including its profile mappings.
+	// Roll back the login time and account changes if authentication fails.
+	originalApp := e.App
+	return originalApp.RunInTransaction(func(txApp core.App) error {
+		e.App = txApp
+		defer func() { e.App = originalApp }()
 
-	e.Record.Set(config.LoginField, types.NowDateTime())
-	if err := e.App.Save(e.Record); err != nil {
-		return err
-	}
+		now := types.NowDateTime()
+		if e.Record == nil {
+			if e.CreateData == nil {
+				e.CreateData = map[string]any{}
+			}
+			// Client-supplied createData must not override these trusted values.
+			e.CreateData[core.FieldNameEmail] = e.OAuth2User.Email
+			e.CreateData[config.LoginField] = now
+		} else {
+			e.Record.Set(config.LoginField, now)
+			if err := txApp.Save(e.Record); err != nil {
+				return err
+			}
+		}
 
-	return e.Next()
+		return e.Next()
+	})
 }
 
 // inGroup reports whether Rauthy's "groups" claim lists group.
@@ -140,15 +169,18 @@ func inGroup(rawUser map[string]any, group string) bool {
 	return false
 }
 
+func matchesCollection(record *core.Record, collection string) bool {
+	return record != nil && (record.Collection().Name == collection || record.Collection().Id == collection)
+}
+
 func sessionExpired(record *core.Record, config Config) bool {
 	loginAt := record.GetDateTime(config.LoginField)
 
 	return loginAt.IsZero() || time.Since(loginAt.Time()) > config.SessionMaxAge
 }
 
-// warnIfTokensUnverified logs when the provider is set up without a JWKS URL
-// or issuers, in which case PocketBase reads the ID token without checking its
-// signature or issuer.
+// warnIfTokensUnverified logs when ID token signature or issuer checks are missing.
+// A configured userinfo endpoint bypasses ID token parsing in PocketBase.
 func warnIfTokensUnverified(app core.App, config Config) {
 	collection, err := app.FindCollectionByNameOrId(config.Collection)
 	if err != nil || !collection.OAuth2.Enabled {
@@ -162,10 +194,14 @@ func warnIfTokensUnverified(app core.App, config Config) {
 		return
 	}
 
+	if provider.UserInfoURL != "" {
+		return
+	}
+
 	jwksURL, _ := provider.Extra["jwksURL"].(string)
 	issuers, _ := provider.Extra["issuers"].([]any)
 	if jwksURL == "" || len(issuers) == 0 {
-		app.Logger().Warn("rauthy: provider has no JWKS URL or issuers, so ID tokens are not verified",
+		app.Logger().Warn("rauthy: ID token verification is incomplete (missing JWKS URL or issuers)",
 			"collection", config.Collection, "provider", config.Provider)
 	}
 }
