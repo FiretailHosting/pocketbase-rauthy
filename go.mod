@@ -1,4 +1,4 @@
-module github.com/FiretailHosting/pocketbase-rauthy
+module github.com/FiretailHosting/pocketbase-sso
 
 go 1.27
 

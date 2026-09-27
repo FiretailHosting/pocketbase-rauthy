@@ -1,10 +1,10 @@
-package rauthy
+package sso
 
 import (
 	"github.com/pocketbase/pocketbase/core"
 )
 
-// Migrate switches the auth collection to Rauthy-only sign-in: password and
+// Migrate switches the auth collection to OIDC-only sign-in: password and
 // OTP sign-in off, OAuth2 on, account creation through OAuth2 or by superusers,
 // and a field recording the last sign-in. Call it from one of the app's migrations.
 //

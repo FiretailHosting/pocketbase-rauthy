@@ -1,8 +1,7 @@
-// Package rauthy signs users in to a PocketBase app through Rauthy (OpenID
-// Connect) and nowhere else. Membership of one Rauthy group decides who gets
-// in, and sessions end a fixed time after the last Rauthy sign-in, so removing
-// someone from the group locks them out.
-package rauthy
+// Package sso applies an opinionated OpenID Connect sign-in policy to a
+// PocketBase auth collection. It requires group membership and a verified
+// email, and limits sessions from the last successful sign-in.
+package sso
 
 import (
 	"errors"
@@ -16,9 +15,9 @@ import (
 
 // Config describes which accounts may sign in and for how long.
 type Config struct {
-	// RequiredGroup is the Rauthy group a user must be in, e.g. "internal-admin".
+	// RequiredGroup is the OIDC group a user must be in, e.g. "internal-admin".
 	RequiredGroup string
-	// SessionMaxAge is how long sessions last after this account's last Rauthy sign-in.
+	// SessionMaxAge is how long sessions last after this account's last OIDC sign-in.
 	SessionMaxAge time.Duration
 	// Collection is the auth collection name or ID; defaults to "users".
 	Collection string
@@ -31,10 +30,10 @@ type Config struct {
 
 func (config Config) withDefaults() (Config, error) {
 	if config.RequiredGroup == "" {
-		return config, errors.New("rauthy: RequiredGroup is required")
+		return config, errors.New("sso: RequiredGroup is required")
 	}
 	if config.SessionMaxAge <= 0 {
-		return config, errors.New("rauthy: SessionMaxAge must be positive")
+		return config, errors.New("sso: SessionMaxAge must be positive")
 	}
 	if config.Collection == "" {
 		config.Collection = "users"
@@ -90,7 +89,7 @@ func Register(app core.App, config Config) error {
 			return err
 		}
 		if !e.HasSuperuserAuth() && info.Context != core.RequestInfoContextOAuth2 {
-			return e.ForbiddenError("Accounts can only be created through Rauthy or by a superuser.", nil)
+			return e.ForbiddenError("Accounts can only be created through the configured OIDC provider or by a superuser.", nil)
 		}
 
 		return e.Next()
@@ -108,7 +107,7 @@ func Register(app core.App, config Config) error {
 	app.OnRealtimeMessageSend().BindFunc(func(e *core.RealtimeMessageEvent) error {
 		record, _ := e.Client.Get(apis.RealtimeClientAuthKey).(*core.Record)
 		if matchesCollection(record, config.Collection) && sessionExpired(record, config) {
-			return errors.New("rauthy: session expired") // PocketBase closes the connection
+			return errors.New("sso: session expired") // PocketBase closes the connection
 		}
 
 		return e.Next()
@@ -119,16 +118,16 @@ func Register(app core.App, config Config) error {
 
 func signIn(e *core.RecordAuthWithOAuth2RequestEvent, config Config) error {
 	if e.ProviderName != config.Provider {
-		return e.ForbiddenError("Sign in with Rauthy.", nil)
+		return e.ForbiddenError("Sign in with the configured OIDC provider.", nil)
 	}
 
 	if !inGroup(e.OAuth2User.RawUser, config.RequiredGroup) {
 		return e.ForbiddenError("Your account is not in the "+config.RequiredGroup+" group, which this app requires.", nil)
 	}
 
-	// PocketBase leaves the email empty unless Rauthy marks it verified
+	// PocketBase leaves the email empty unless the provider marks it verified.
 	if e.OAuth2User.Email == "" {
-		return e.ForbiddenError("Rauthy did not supply a verified email address for this account.", nil)
+		return e.ForbiddenError("The OIDC provider did not supply a verified email address for this account.", nil)
 	}
 
 	// Let PocketBase create and link accounts, including its profile mappings.
@@ -157,7 +156,7 @@ func signIn(e *core.RecordAuthWithOAuth2RequestEvent, config Config) error {
 	})
 }
 
-// inGroup reports whether Rauthy's "groups" claim lists group.
+// inGroup reports whether the provider's "groups" claim lists group.
 func inGroup(rawUser map[string]any, group string) bool {
 	groups, _ := rawUser["groups"].([]any)
 	for _, member := range groups {
@@ -189,7 +188,7 @@ func warnIfTokensUnverified(app core.App, config Config) {
 
 	provider, ok := collection.OAuth2.GetProviderConfig(config.Provider)
 	if !ok {
-		app.Logger().Warn("rauthy: no OAuth2 provider configured; nobody can sign in",
+		app.Logger().Warn("sso: no OAuth2 provider configured; nobody can sign in",
 			"collection", config.Collection, "provider", config.Provider)
 		return
 	}
@@ -201,7 +200,7 @@ func warnIfTokensUnverified(app core.App, config Config) {
 	jwksURL, _ := provider.Extra["jwksURL"].(string)
 	issuers, _ := provider.Extra["issuers"].([]any)
 	if jwksURL == "" || len(issuers) == 0 {
-		app.Logger().Warn("rauthy: ID token verification is incomplete (missing JWKS URL or issuers)",
+		app.Logger().Warn("sso: ID token verification is incomplete (missing JWKS URL or issuers)",
 			"collection", config.Collection, "provider", config.Provider)
 	}
 }
