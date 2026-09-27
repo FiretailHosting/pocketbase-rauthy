@@ -125,7 +125,7 @@ func claims() map[string]any {
 	return map[string]any{
 		"sub": "subject", "email": "user@example.com", "email_verified": true,
 		"name": "New User", "groups": []string{"internal-admin"},
-		"iss": "https://rauthy.example.test/", "aud": "client", "exp": time.Now().Add(time.Hour).Unix(),
+		"iss": "https://provider.example.test/", "aud": "client", "exp": time.Now().Add(time.Hour).Unix(),
 	}
 }
 
@@ -165,7 +165,7 @@ func configureProvider(t testing.TB, app core.App, claims map[string]any) {
 	users.OAuth2.Providers = []core.OAuth2ProviderConfig{{
 		Name: "oidc", ClientId: "client", ClientSecret: "secret",
 		AuthURL: provider.URL + "/authorize", TokenURL: provider.URL + "/token",
-		Extra: map[string]any{"jwksURL": provider.URL + "/jwks?key=" + encode(publicKey), "issuers": []string{"https://rauthy.example.test/"}},
+		Extra: map[string]any{"jwksURL": provider.URL + "/jwks?key=" + encode(publicKey), "issuers": []string{"https://provider.example.test/"}},
 	}}
 	save(t, app, users)
 }
