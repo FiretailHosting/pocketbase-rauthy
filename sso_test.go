@@ -1,4 +1,4 @@
-package rauthy
+package sso
 
 import (
 	"bufio"
@@ -286,7 +286,7 @@ func TestOtherProviderIsRefused(t *testing.T) {
 		t.Error("refused provider reached PocketBase")
 		return nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "Sign in with Rauthy") {
+	if err == nil || !strings.Contains(err.Error(), "Sign in with the configured OIDC provider") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -386,7 +386,7 @@ func TestAPIAccountCreationRequiresSuperuser(t *testing.T) {
 	handler := router(t, app)
 	body := map[string]any{"email": "new@example.com", "password": "12345678901", "passwordConfirm": "12345678901", "context": "oauth2"}
 	response := request(t, handler, http.MethodPost, "/api/collections/users/records?context=oauth2", "", body, http.StatusForbidden)
-	if !strings.Contains(response.Body.String(), "only be created through Rauthy or by a superuser") {
+	if !strings.Contains(response.Body.String(), "only be created through the configured OIDC provider or by a superuser") {
 		t.Fatal(response.Body.String())
 	}
 	assertCount(t, app, "users", 0)

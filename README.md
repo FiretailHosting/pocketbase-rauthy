@@ -1,24 +1,24 @@
-# pocketbase-rauthy
+# pocketbase-sso
 
-Rauthy (OpenID Connect) sign-in for PocketBase apps.
-Only members of one Rauthy group can sign in, sessions end a fixed time after the account's last Rauthy sign-in, and password sign-in is off.
+Opinionated OpenID Connect sign-in for PocketBase apps.
+Only members of one provider group can sign in, sessions end a fixed time after the account's last OIDC sign-in, and password sign-in is off.
 
 ## Use
 
 ```sh
-go get github.com/FiretailHosting/pocketbase-rauthy
+go get github.com/FiretailHosting/pocketbase-sso
 ```
 
 ```go
-var sso = rauthy.Config{RequiredGroup: "internal-admin", SessionMaxAge: 8 * time.Hour}
+var authPolicy = sso.Config{RequiredGroup: "internal-admin", SessionMaxAge: 8 * time.Hour}
 
 // at startup
-if err := rauthy.Register(app, sso); err != nil {
+if err := sso.Register(app, authPolicy); err != nil {
 	log.Fatal(err)
 }
 
 // in one of the app's migrations
-m.Register(func(app core.App) error { return rauthy.Migrate(app, sso) }, nil)
+m.Register(func(app core.App) error { return sso.Migrate(app, authPolicy) }, nil)
 ```
 
 `Collection` (name or ID, default `users`), `Provider` (`oidc`) and `LoginField` (`sso_login_at`) are optional.
@@ -38,21 +38,28 @@ Other routes follow their normal signed-out behavior, which can include 404 for 
   It leaves the provider config alone.
 
 The session limit is **account-wide**, not per device or token.
-A successful Rauthy sign-in renews the window for that account's other still-valid tokens; each token's own expiration still applies.
+A successful OIDC sign-in renews the window for that account's other still-valid tokens; each token's own expiration still applies.
 After `SessionMaxAge`, HTTP requests are treated as signed out and existing realtime connections are closed before sending further protected messages.
-Removing a user from the Rauthy group takes effect no later than this window ends, not immediately.
+Removing a user from the required group takes effect no later than this window ends, not immediately.
 
 If you already applied an earlier version of this package's migration, call `Migrate` in a new application migration to update the OAuth2 create rule.
 
-The superuser dashboard (`/_/`) still uses a password and is the way back in if Rauthy is down.
+The superuser dashboard (`/_/`) still uses a password and is the way back in if the provider is down.
 
-## Rauthy client
+## Provider requirements
+
+Configure an OpenID Connect provider for the auth collection in the PocketBase superuser dashboard.
+It must supply a verified email and a `groups` array containing `RequiredGroup`.
+The provider name in PocketBase must match `Config.Provider` (default `oidc`).
+The package does not set the provider endpoints or credentials.
+
+## Rauthy example
 
 - Confidential client, authorization code flow, PKCE `S256`.
 - Redirect URI `<app origin>/api/oauth2-redirect`.
 - Scopes `openid email profile groups`, with `groups` as a default scope: PocketBase does not request it.
 
-## PocketBase provider
+## PocketBase provider for Rauthy
 
 `/_/` → the collection → Options → OAuth2 → OpenID Connect:
 
@@ -75,4 +82,4 @@ make check   # gofmt, vet, race tests, build
 ```
 
 Tests cover signed OIDC exchanges against a local test provider, account linking, profile mappings, rollback, API guards, and realtime expiry.
-A live Rauthy deployment is not part of the test suite.
+A live identity provider is not part of the test suite.
