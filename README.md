@@ -42,8 +42,6 @@ A successful OIDC sign-in renews the window for that account's other still-valid
 After `SessionMaxAge`, HTTP requests are treated as signed out and existing realtime connections are closed before sending further protected messages.
 Removing a user from the required group takes effect no later than this window ends, not immediately.
 
-If you already applied an earlier version of this package's migration, call `Migrate` in a new application migration to update the OAuth2 create rule.
-
 The superuser dashboard (`/_/`) still uses a password and is the way back in if the provider is down.
 
 ## Provider requirements
@@ -53,26 +51,12 @@ It must supply a verified email and a `groups` array containing `RequiredGroup`.
 The provider name in PocketBase must match `Config.Provider` (default `oidc`).
 The package does not set the provider endpoints or credentials.
 
-## Rauthy example
+In `/_/` → the collection → Options → OAuth2 → OpenID Connect, enter the selected provider's client credentials and endpoints.
+Register `<app origin>/api/oauth2-redirect` as a redirect URI with that provider.
+Ensure it includes `groups` in the identity data PocketBase reads, even though PocketBase requests only `openid`, `email`, and `profile` scopes.
 
-- Confidential client, authorization code flow, PKCE `S256`.
-- Redirect URI `<app origin>/api/oauth2-redirect`.
-- Scopes `openid email profile groups`, with `groups` as a default scope: PocketBase does not request it.
-
-## PocketBase provider for Rauthy
-
-`/_/` → the collection → Options → OAuth2 → OpenID Connect:
-
-| Field | Value |
-| --- | --- |
-| Client ID / secret | from Rauthy |
-| Auth URL | `https://auth.firetailhosting.com/auth/v1/oidc/authorize` |
-| Token URL | `https://auth.firetailhosting.com/auth/v1/oidc/token` |
-| User info URL | empty (reads the ID token) |
-| JWKS verification URL | `https://auth.firetailhosting.com/auth/v1/oidc/certs` |
-| Issuers | `https://auth.firetailhosting.com/auth/v1/` |
-
-Set both the JWKS URL and issuers: without either, PocketBase omits the corresponding ID token signature or issuer check, and the package logs a startup warning.
+If PocketBase reads identity data from the ID token, set both the JWKS URL and issuers.
+Without either, PocketBase omits the corresponding ID token signature or issuer check, and the package logs a startup warning.
 If a userinfo URL is configured instead, PocketBase reads identity data from that endpoint rather than the ID token.
 
 ## Check
